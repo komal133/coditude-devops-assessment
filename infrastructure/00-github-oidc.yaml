@@ -54,7 +54,7 @@ Resources:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
               StringLike:
                 # Only workflows from THIS repository may assume the role.
-                token.actions.githubusercontent.com:sub: !Sub 'repo:${GitHubOrg}/${GitHubRepo}:*'
+                token.actions.githubusercontent.com:sub: 'repo:komal133@95909576/coditude-devops-assessment@1364254052:*'
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/PowerUserAccess
       Policies:
@@ -71,6 +71,7 @@ Resources:
                   - iam:GetRole
                   - iam:PassRole
                   - iam:TagRole
+                  - iam:UntagRole
                   - iam:AttachRolePolicy
                   - iam:DetachRolePolicy
                   - iam:PutRolePolicy
@@ -85,9 +86,9 @@ Resources:
                   - iam:RemoveRoleFromInstanceProfile
                   - iam:CreateServiceLinkedRole
                 Resource:
-                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/dev-*'
-                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/staging-*'
-                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/prod-*'
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/coditude-dev-*'
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/coditude-staging-*'
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/coditude-prod-*'
                   - !Sub 'arn:aws:iam::${AWS::AccountId}:role/aws-service-role/*'
                   - !Sub 'arn:aws:iam::${AWS::AccountId}:instance-profile/*'
 

@@ -37,7 +37,7 @@ Resources:
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
-      BucketName: !Sub '${EnvironmentName}-app-artifacts-${AWS::AccountId}-${AWS::Region}'
+      BucketName: !Sub 'coditude-${EnvironmentName}-app-artifacts-${AWS::AccountId}-${AWS::Region}'
       VersioningConfiguration:
         Status: Enabled
       BucketEncryption:
@@ -59,7 +59,7 @@ Resources:
   InstanceRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub '${EnvironmentName}-app-instance-role'
+      RoleName: !Sub 'coditude-${EnvironmentName}-app-instance-role'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -100,7 +100,7 @@ Resources:
   CodeDeployServiceRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub '${EnvironmentName}-codedeploy-role'
+      RoleName: !Sub 'coditude-${EnvironmentName}-codedeploy-role'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -320,7 +320,7 @@ Resources:
   AutoScalingGroup:
     Type: AWS::AutoScaling::AutoScalingGroup
     Properties:
-      AutoScalingGroupName: !Sub '${EnvironmentName}-app-asg'
+      AutoScalingGroupName: !Sub 'coditude-${EnvironmentName}-app-asg'
       LaunchTemplate:
         LaunchTemplateId: !Ref LaunchTemplate
         Version: !GetAtt LaunchTemplate.LatestVersionNumber
@@ -361,14 +361,14 @@ Resources:
   CodeDeployApplication:
     Type: AWS::CodeDeploy::Application
     Properties:
-      ApplicationName: !Sub '${EnvironmentName}-app'
+      ApplicationName: !Sub 'coditude-${EnvironmentName}-app'
       ComputePlatform: Server
 
   DeploymentGroup:
     Type: AWS::CodeDeploy::DeploymentGroup
     Properties:
       ApplicationName: !Ref CodeDeployApplication
-      DeploymentGroupName: !Sub '${EnvironmentName}-app-dg'
+      DeploymentGroupName: !Sub 'coditude-${EnvironmentName}-app-dg'
       ServiceRoleArn: !GetAtt CodeDeployServiceRole.Arn
       AutoScalingGroups:
         - !Ref AutoScalingGroup
@@ -405,3 +405,5 @@ Outputs:
     Value: !GetAtt Ec2LoadBalancer.LoadBalancerFullName
     Export:
       Name: !Sub '${EnvironmentName}-Ec2AlbFullName'
+
+
