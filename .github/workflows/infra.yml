@@ -1,0 +1,103 @@
+name: Infrastructure
+
+# Runs ONLY when infrastructure code changes. Application code changes can
+# never reach this workflow, which is what keeps application releases from
+# touching the infrastructure.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'infrastructure/**'
+      - '.github/workflows/infra.yml'
+  workflow_dispatch:
+
+permissions:
+  id-token: write   # required for OIDC
+  contents: read
+
+env:
+  AWS_REGION: ap-south-1
+
+concurrency:
+  group: infrastructure
+  cancel-in-progress: false
+
+jobs:
+
+  validate:
+    name: Validate templates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install cfn-lint
+        run: pip install cfn-lint
+      - name: Lint every CloudFormation template
+        run: cfn-lint infrastructure/*.yaml
+
+  dev:
+    name: Deploy dev
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Deploy stacks in dependency order
+        run: |
+          set -e
+          chmod +x infrastructure/deploy.sh
+          for template in 10-network.yaml 20-database.yaml 30-platform.yaml; do
+            ./infrastructure/deploy.sh dev "$template"
+          done
+      - name: Deploy workload stacks
+        run: |
+          set -e
+          for template in 40-ecs-services.yaml 50-ec2-noncontainer.yaml 60-monitoring.yaml; do
+            ./infrastructure/deploy.sh dev "$template"
+          done
+
+  staging:
+    name: Deploy staging
+    needs: dev
+    runs-on: ubuntu-latest
+    environment: staging     # add required reviewers in repo settings
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Deploy stacks
+        run: |
+          set -e
+          chmod +x infrastructure/deploy.sh
+          for template in 10-network.yaml 20-database.yaml 30-platform.yaml \
+                          40-ecs-services.yaml 50-ec2-noncontainer.yaml 60-monitoring.yaml; do
+            ./infrastructure/deploy.sh staging "$template"
+          done
+
+  prod:
+    name: Deploy prod
+    needs: staging
+    runs-on: ubuntu-latest
+    environment: prod        # add required reviewers in repo settings
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Deploy stacks
+        run: |
+          set -e
+          chmod +x infrastructure/deploy.sh
+          for template in 10-network.yaml 20-database.yaml 30-platform.yaml \
+                          40-ecs-services.yaml 50-ec2-noncontainer.yaml 60-monitoring.yaml; do
+            ./infrastructure/deploy.sh prod "$template"
+          done

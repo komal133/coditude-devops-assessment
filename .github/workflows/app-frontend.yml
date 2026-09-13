@@ -1,0 +1,86 @@
+name: Frontend application
+
+# Triggered only by frontend source changes. No CloudFormation command appears
+# anywhere in this workflow.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/frontend/**'
+      - 'deploy/ecs-release.sh'
+      - '.github/workflows/app-frontend.yml'
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: ap-south-1
+
+concurrency:
+  group: frontend-release
+  cancel-in-progress: false
+
+jobs:
+
+  test:
+    name: Build check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install dependencies
+        run: cd apps/frontend && npm install
+      - name: Build the Next.js application
+        run: cd apps/frontend && npm run build
+
+  dev:
+    name: Release to dev
+    needs: test
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Build, push and roll out
+        run: |
+          chmod +x deploy/ecs-release.sh
+          IMAGE_TAG=${GITHUB_SHA::8} ./deploy/ecs-release.sh dev frontend apps/frontend
+
+  staging:
+    name: Release to staging
+    needs: dev
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Build, push and roll out
+        run: |
+          chmod +x deploy/ecs-release.sh
+          IMAGE_TAG=${GITHUB_SHA::8} ./deploy/ecs-release.sh staging frontend apps/frontend
+
+  prod:
+    name: Release to prod
+    needs: staging
+    runs-on: ubuntu-latest
+    environment: prod
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Build, push and roll out
+        run: |
+          chmod +x deploy/ecs-release.sh
+          IMAGE_TAG=${GITHUB_SHA::8} ./deploy/ecs-release.sh prod frontend apps/frontend

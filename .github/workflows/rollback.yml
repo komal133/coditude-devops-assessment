@@ -1,0 +1,57 @@
+name: Rollback
+
+# One-click rollback. Run it from the Actions tab: choose the environment,
+# the component and (optionally) the exact task definition revision.
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        required: true
+        type: choice
+        options: [dev, staging, prod]
+      component:
+        description: Which service to roll back
+        required: true
+        type: choice
+        options: [frontend, backend]
+      revision:
+        description: Task definition revision number (leave empty for the previous one)
+        required: false
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: ap-south-1
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Roll the service back to a previous task definition
+        run: |
+          set -euo pipefail
+          FAMILY="${{ inputs.environment }}-${{ inputs.component }}"
+          CLUSTER="${{ inputs.environment }}-cluster"
+          REVISION="${{ inputs.revision }}"
+
+          if [ -z "$REVISION" ]; then
+            CURRENT=$(aws ecs describe-services --cluster "$CLUSTER" --services "$FAMILY" \
+              --query 'services[0].taskDefinition' --output text)
+            REVISION=$(( ${CURRENT##*:} - 1 ))
+          fi
+
+          echo "Rolling $FAMILY back to revision $REVISION"
+          aws ecs update-service --cluster "$CLUSTER" --service "$FAMILY" \
+            --task-definition "$FAMILY:$REVISION" >/dev/null
+          aws ecs wait services-stable --cluster "$CLUSTER" --services "$FAMILY"
+          echo "Rollback complete."

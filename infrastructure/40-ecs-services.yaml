@@ -1,0 +1,278 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Layer 4 - CONTAINERISED workloads. ECS Fargate task definitions and services
+  for the Next.js frontend and the Python backend, with auto scaling and the
+  deployment circuit breaker (automatic rollback on a failed release).
+  NOTE: after the first creation, application releases are performed by the
+  CI/CD pipeline with the ECS API - this stack is NOT re-deployed for an
+  application-only change.
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    AllowedValues: [dev, staging, prod]
+  FrontendImageTag:
+    Type: String
+    Default: latest
+  BackendImageTag:
+    Type: String
+    Default: latest
+  FrontendDesiredCount:
+    Type: Number
+    Default: 2
+  BackendDesiredCount:
+    Type: Number
+    Default: 2
+  TaskCpu:
+    Type: String
+    Default: '512'
+    AllowedValues: ['256', '512', '1024', '2048']
+  TaskMemory:
+    Type: String
+    Default: '1024'
+  MaxTaskCount:
+    Type: Number
+    Default: 6
+
+Resources:
+
+  # ------------------------------------------------------ task definitions --
+  FrontendTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${EnvironmentName}-frontend'
+      Cpu: !Ref TaskCpu
+      Memory: !Ref TaskMemory
+      NetworkMode: awsvpc
+      RequiresCompatibilities: [FARGATE]
+      ExecutionRoleArn:
+        Fn::ImportValue: !Sub '${EnvironmentName}-TaskExecutionRoleArn'
+      TaskRoleArn:
+        Fn::ImportValue: !Sub '${EnvironmentName}-TaskRoleArn'
+      RuntimePlatform:
+        CpuArchitecture: X86_64
+        OperatingSystemFamily: LINUX
+      ContainerDefinitions:
+        - Name: frontend
+          Image: !Sub
+            - '${Repo}:${Tag}'
+            - Repo:
+                Fn::ImportValue: !Sub '${EnvironmentName}-FrontendRepositoryUri'
+              Tag: !Ref FrontendImageTag
+          Essential: true
+          PortMappings:
+            - ContainerPort: 3000
+              Protocol: tcp
+          Environment:
+            - Name: NODE_ENV
+              Value: production
+            - Name: APP_ENV
+              Value: !Ref EnvironmentName
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Sub '/ecs/${EnvironmentName}/frontend'
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+
+  BackendTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${EnvironmentName}-backend'
+      Cpu: !Ref TaskCpu
+      Memory: !Ref TaskMemory
+      NetworkMode: awsvpc
+      RequiresCompatibilities: [FARGATE]
+      ExecutionRoleArn:
+        Fn::ImportValue: !Sub '${EnvironmentName}-TaskExecutionRoleArn'
+      TaskRoleArn:
+        Fn::ImportValue: !Sub '${EnvironmentName}-TaskRoleArn'
+      RuntimePlatform:
+        CpuArchitecture: X86_64
+        OperatingSystemFamily: LINUX
+      ContainerDefinitions:
+        - Name: backend
+          Image: !Sub
+            - '${Repo}:${Tag}'
+            - Repo:
+                Fn::ImportValue: !Sub '${EnvironmentName}-BackendRepositoryUri'
+              Tag: !Ref BackendImageTag
+          Essential: true
+          PortMappings:
+            - ContainerPort: 8000
+              Protocol: tcp
+          Environment:
+            - Name: APP_ENV
+              Value: !Ref EnvironmentName
+          # Values below are pulled from Secrets Manager by the ECS agent and
+          # injected as environment variables. They never appear in the
+          # template, in Git, or in the CloudFormation console.
+          Secrets:
+            - Name: DB_HOST
+              ValueFrom: !Sub
+                - '${Arn}:host::'
+                - Arn:
+                    Fn::ImportValue: !Sub '${EnvironmentName}-DatabaseSecretArn'
+            - Name: DB_PORT
+              ValueFrom: !Sub
+                - '${Arn}:port::'
+                - Arn:
+                    Fn::ImportValue: !Sub '${EnvironmentName}-DatabaseSecretArn'
+            - Name: DB_NAME
+              ValueFrom: !Sub
+                - '${Arn}:dbname::'
+                - Arn:
+                    Fn::ImportValue: !Sub '${EnvironmentName}-DatabaseSecretArn'
+            - Name: DB_USER
+              ValueFrom: !Sub
+                - '${Arn}:username::'
+                - Arn:
+                    Fn::ImportValue: !Sub '${EnvironmentName}-DatabaseSecretArn'
+            - Name: DB_PASSWORD
+              ValueFrom: !Sub
+                - '${Arn}:password::'
+                - Arn:
+                    Fn::ImportValue: !Sub '${EnvironmentName}-DatabaseSecretArn'
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Sub '/ecs/${EnvironmentName}/backend'
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+
+  # ------------------------------------------------------------- services ---
+  FrontendService:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !Sub '${EnvironmentName}-frontend'
+      Cluster:
+        Fn::ImportValue: !Sub '${EnvironmentName}-ClusterName'
+      TaskDefinition: !Ref FrontendTaskDefinition
+      DesiredCount: !Ref FrontendDesiredCount
+      LaunchType: FARGATE
+      PlatformVersion: LATEST
+      HealthCheckGracePeriodSeconds: 60
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 100
+        MaximumPercent: 200
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: true
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          SecurityGroups:
+            - Fn::ImportValue: !Sub '${EnvironmentName}-EcsSecurityGroup'
+          Subnets: !Split
+            - ','
+            - Fn::ImportValue: !Sub '${EnvironmentName}-AppSubnets'
+      LoadBalancers:
+        - ContainerName: frontend
+          ContainerPort: 3000
+          TargetGroupArn:
+            Fn::ImportValue: !Sub '${EnvironmentName}-FrontendTargetGroupArn'
+
+  BackendService:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !Sub '${EnvironmentName}-backend'
+      Cluster:
+        Fn::ImportValue: !Sub '${EnvironmentName}-ClusterName'
+      TaskDefinition: !Ref BackendTaskDefinition
+      DesiredCount: !Ref BackendDesiredCount
+      LaunchType: FARGATE
+      PlatformVersion: LATEST
+      HealthCheckGracePeriodSeconds: 60
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 100
+        MaximumPercent: 200
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: true
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          SecurityGroups:
+            - Fn::ImportValue: !Sub '${EnvironmentName}-EcsSecurityGroup'
+          Subnets: !Split
+            - ','
+            - Fn::ImportValue: !Sub '${EnvironmentName}-AppSubnets'
+      LoadBalancers:
+        - ContainerName: backend
+          ContainerPort: 8000
+          TargetGroupArn:
+            Fn::ImportValue: !Sub '${EnvironmentName}-BackendTargetGroupArn'
+
+  # --------------------------------------------------------- auto scaling ---
+  AutoScalingRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: application-autoscaling.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceAutoscaleRole
+
+  FrontendScalableTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      ServiceNamespace: ecs
+      ScalableDimension: ecs:service:DesiredCount
+      ResourceId: !Sub
+        - 'service/${Cluster}/${Service}'
+        - Cluster:
+            Fn::ImportValue: !Sub '${EnvironmentName}-ClusterName'
+          Service: !GetAtt FrontendService.Name
+      MinCapacity: !Ref FrontendDesiredCount
+      MaxCapacity: !Ref MaxTaskCount
+      RoleARN: !GetAtt AutoScalingRole.Arn
+
+  FrontendScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: !Sub '${EnvironmentName}-frontend-cpu-target'
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref FrontendScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 60
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+        ScaleInCooldown: 300
+        ScaleOutCooldown: 60
+
+  BackendScalableTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      ServiceNamespace: ecs
+      ScalableDimension: ecs:service:DesiredCount
+      ResourceId: !Sub
+        - 'service/${Cluster}/${Service}'
+        - Cluster:
+            Fn::ImportValue: !Sub '${EnvironmentName}-ClusterName'
+          Service: !GetAtt BackendService.Name
+      MinCapacity: !Ref BackendDesiredCount
+      MaxCapacity: !Ref MaxTaskCount
+      RoleARN: !GetAtt AutoScalingRole.Arn
+
+  BackendScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: !Sub '${EnvironmentName}-backend-cpu-target'
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref BackendScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 60
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+        ScaleInCooldown: 300
+        ScaleOutCooldown: 60
+
+Outputs:
+  FrontendServiceName:
+    Value: !GetAtt FrontendService.Name
+  BackendServiceName:
+    Value: !GetAtt BackendService.Name

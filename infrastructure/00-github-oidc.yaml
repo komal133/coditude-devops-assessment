@@ -1,0 +1,97 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Layer 0 - CI/CD identity. Creates the GitHub OIDC identity provider and a
+  single IAM role that GitHub Actions assumes at run time. This removes the
+  need for long-lived AWS access keys in GitHub secrets.
+  Deploy this stack ONCE per AWS account.
+
+Parameters:
+  GitHubOrg:
+    Type: String
+    Description: Your GitHub username or organisation, e.g. machindra-dev
+  GitHubRepo:
+    Type: String
+    Description: Repository name, e.g. aws-devops-assessment
+  CreateOidcProvider:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: >
+      Set to 'false' if token.actions.githubusercontent.com already exists as
+      an identity provider in this AWS account.
+
+Conditions:
+  ShouldCreateProvider: !Equals [!Ref CreateOidcProvider, 'true']
+
+Resources:
+
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: ShouldCreateProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+      ThumbprintList:
+        - 6938fd4d98bab03faadb97b34396831e3780aea1
+        - 1c58a3a8518e8759bf075b76b750d4f2df264fcd
+
+  GitHubActionsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'github-actions-${GitHubRepo}'
+      Description: Assumed by GitHub Actions through OIDC - no static keys.
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Sub 'arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com'
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+              StringLike:
+                # Only workflows from THIS repository may assume the role.
+                token.actions.githubusercontent.com:sub: !Sub 'repo:${GitHubOrg}/${GitHubRepo}:*'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/PowerUserAccess
+      Policies:
+        - PolicyName: iam-for-cloudformation
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # CloudFormation needs to create the service roles used by ECS,
+              # EC2 and CodeDeploy. Scoped to this project's naming pattern.
+              - Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:GetRole
+                  - iam:PassRole
+                  - iam:TagRole
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:PutRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:GetRolePolicy
+                  - iam:ListRolePolicies
+                  - iam:ListAttachedRolePolicies
+                  - iam:CreateInstanceProfile
+                  - iam:DeleteInstanceProfile
+                  - iam:GetInstanceProfile
+                  - iam:AddRoleToInstanceProfile
+                  - iam:RemoveRoleFromInstanceProfile
+                  - iam:CreateServiceLinkedRole
+                Resource:
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/dev-*'
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/staging-*'
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/prod-*'
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/aws-service-role/*'
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:instance-profile/*'
+
+Outputs:
+  RoleArn:
+    Description: Put this value into the GitHub repository variable AWS_ROLE_ARN
+    Value: !GetAtt GitHubActionsRole.Arn

@@ -1,0 +1,208 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Layer 6 - Observability. SNS alert topic, CloudWatch alarms for the load
+  balancer, ECS services and the database, and a single dashboard that shows
+  the health of both deployment styles.
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    AllowedValues: [dev, staging, prod]
+  AlertEmail:
+    Type: String
+    Description: Email address that receives alarm notifications.
+  Alarm5xxThreshold:
+    Type: Number
+    Default: 5
+
+Resources:
+
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub '${EnvironmentName}-platform-alerts'
+      DisplayName: !Sub '${EnvironmentName} platform alerts'
+
+  AlertSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Protocol: email
+      Endpoint: !Ref AlertEmail
+      TopicArn: !Ref AlertTopic
+
+  Alb5xxAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${EnvironmentName}-ecs-alb-5xx'
+      AlarmDescription: Backend returning server errors through the ALB
+      Namespace: AWS/ApplicationELB
+      MetricName: HTTPCode_Target_5XX_Count
+      Dimensions:
+        - Name: LoadBalancer
+          Value:
+            Fn::ImportValue: !Sub '${EnvironmentName}-EcsAlbFullName'
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: !Ref Alarm5xxThreshold
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlertTopic
+
+  AlbUnhealthyHostAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${EnvironmentName}-ecs-alb-unhealthy-hosts'
+      AlarmDescription: One or more targets are failing health checks
+      Namespace: AWS/ApplicationELB
+      MetricName: UnHealthyHostCount
+      Dimensions:
+        - Name: LoadBalancer
+          Value:
+            Fn::ImportValue: !Sub '${EnvironmentName}-EcsAlbFullName'
+        - Name: TargetGroup
+          Value: !Select
+            - 5
+            - !Split
+              - ':'
+              - Fn::ImportValue: !Sub '${EnvironmentName}-BackendTargetGroupArn'
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 3
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlertTopic
+
+  BackendServiceCpuAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${EnvironmentName}-backend-cpu-high'
+      Namespace: AWS/ECS
+      MetricName: CPUUtilization
+      Dimensions:
+        - Name: ClusterName
+          Value:
+            Fn::ImportValue: !Sub '${EnvironmentName}-ClusterName'
+        - Name: ServiceName
+          Value: !Sub '${EnvironmentName}-backend'
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlertTopic
+
+  DatabaseCpuAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${EnvironmentName}-rds-cpu-high'
+      Namespace: AWS/RDS
+      MetricName: CPUUtilization
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Sub '${EnvironmentName}-app-postgres'
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlertTopic
+
+  DatabaseStorageAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${EnvironmentName}-rds-low-storage'
+      Namespace: AWS/RDS
+      MetricName: FreeStorageSpace
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Sub '${EnvironmentName}-app-postgres'
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 2000000000
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlertTopic
+
+  Dashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub '${EnvironmentName}-platform'
+      DashboardBody: !Sub
+        - |
+          {
+            "widgets": [
+              {
+                "type": "metric", "x": 0, "y": 0, "width": 12, "height": 6,
+                "properties": {
+                  "title": "ALB requests and errors (containerised)",
+                  "region": "${AWS::Region}",
+                  "metrics": [
+                    ["AWS/ApplicationELB", "RequestCount", "LoadBalancer", "${EcsAlb}"],
+                    [".", "HTTPCode_Target_5XX_Count", ".", "."],
+                    [".", "TargetResponseTime", ".", "."]
+                  ],
+                  "stat": "Sum", "period": 300
+                }
+              },
+              {
+                "type": "metric", "x": 12, "y": 0, "width": 12, "height": 6,
+                "properties": {
+                  "title": "ALB requests and errors (EC2)",
+                  "region": "${AWS::Region}",
+                  "metrics": [
+                    ["AWS/ApplicationELB", "RequestCount", "LoadBalancer", "${Ec2Alb}"],
+                    [".", "HTTPCode_Target_5XX_Count", ".", "."]
+                  ],
+                  "stat": "Sum", "period": 300
+                }
+              },
+              {
+                "type": "metric", "x": 0, "y": 6, "width": 12, "height": 6,
+                "properties": {
+                  "title": "ECS service utilisation",
+                  "region": "${AWS::Region}",
+                  "metrics": [
+                    ["AWS/ECS", "CPUUtilization", "ClusterName", "${Cluster}", "ServiceName", "${EnvironmentName}-backend"],
+                    ["...", "${EnvironmentName}-frontend"],
+                    ["AWS/ECS", "MemoryUtilization", "ClusterName", "${Cluster}", "ServiceName", "${EnvironmentName}-backend"]
+                  ],
+                  "stat": "Average", "period": 300
+                }
+              },
+              {
+                "type": "metric", "x": 12, "y": 6, "width": 12, "height": 6,
+                "properties": {
+                  "title": "RDS PostgreSQL",
+                  "region": "${AWS::Region}",
+                  "metrics": [
+                    ["AWS/RDS", "CPUUtilization", "DBInstanceIdentifier", "${EnvironmentName}-app-postgres"],
+                    [".", "DatabaseConnections", ".", "."],
+                    [".", "FreeableMemory", ".", "."]
+                  ],
+                  "stat": "Average", "period": 300
+                }
+              }
+            ]
+          }
+        - EcsAlb:
+            Fn::ImportValue: !Sub '${EnvironmentName}-EcsAlbFullName'
+          Ec2Alb:
+            Fn::ImportValue: !Sub '${EnvironmentName}-Ec2AlbFullName'
+          Cluster:
+            Fn::ImportValue: !Sub '${EnvironmentName}-ClusterName'
+
+Outputs:
+  AlertTopicArn:
+    Value: !Ref AlertTopic
+    Export:
+      Name: !Sub '${EnvironmentName}-AlertTopicArn'

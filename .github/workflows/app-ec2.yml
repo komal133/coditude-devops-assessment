@@ -1,0 +1,40 @@
+name: EC2 application (non-containerised)
+
+# Same application code, delivered to the EC2 Auto Scaling Group through
+# AWS CodeDeploy. Infrastructure stacks are never touched here either.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/**'
+      - 'deploy/appspec.yml'
+      - 'deploy/scripts/**'
+      - 'deploy/build-ec2-bundle.sh'
+      - '.github/workflows/app-ec2.yml'
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: ec2-release
+  cancel-in-progress: false
+
+jobs:
+  dev:
+    uses: ./.github/workflows/reusable-ec2-deploy.yml
+    with:
+      environment: dev
+
+  staging:
+    needs: dev
+    uses: ./.github/workflows/reusable-ec2-deploy.yml
+    with:
+      environment: staging
+
+  prod:
+    needs: staging
+    uses: ./.github/workflows/reusable-ec2-deploy.yml
+    with:
+      environment: prod

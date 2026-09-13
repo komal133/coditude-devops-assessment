@@ -1,0 +1,407 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Layer 5 - NON-CONTAINERISED workloads. A second Application Load Balancer, an
+  EC2 Auto Scaling Group of Amazon Linux 2023 instances running the two apps as
+  systemd services, a versioned S3 artifact bucket and an AWS CodeDeploy
+  application/deployment group with automatic rollback.
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    AllowedValues: [dev, staging, prod]
+  InstanceType:
+    Type: String
+    Default: t3.small
+  MinSize:
+    Type: Number
+    Default: 2
+  MaxSize:
+    Type: Number
+    Default: 4
+  DesiredCapacity:
+    Type: Number
+    Default: 2
+  LatestAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+    Description: Always resolves to the newest Amazon Linux 2023 AMI.
+  NodeVersion:
+    Type: String
+    Default: 20.18.1
+
+Resources:
+
+  # ------------------------------------------------------- artifact bucket --
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub '${EnvironmentName}-app-artifacts-${AWS::AccountId}-${AWS::Region}'
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-old-artifact-versions
+            Status: Enabled
+            NoncurrentVersionExpirationInDays: 30
+
+  # ------------------------------------------------------------ IAM roles ---
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${EnvironmentName}-app-instance-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
+      Policies:
+        - PolicyName: read-artifacts-and-secret
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:ListBucket
+                Resource:
+                  - !Sub 'arn:aws:s3:::${ArtifactBucket}'
+                  - !Sub 'arn:aws:s3:::${ArtifactBucket}/*'
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub 'arn:aws:s3:::aws-codedeploy-${AWS::Region}/*'
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource:
+                  Fn::ImportValue: !Sub '${EnvironmentName}-DatabaseSecretArn'
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref InstanceRole
+
+  CodeDeployServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${EnvironmentName}-codedeploy-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codedeploy.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSCodeDeployRole
+
+  # -------------------------------------------------------- load balancing --
+  Ec2LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub '${EnvironmentName}-ec2-alb'
+      Scheme: internet-facing
+      Type: application
+      SecurityGroups:
+        - Fn::ImportValue: !Sub '${EnvironmentName}-AlbSecurityGroup'
+      Subnets: !Split
+        - ','
+        - Fn::ImportValue: !Sub '${EnvironmentName}-PublicSubnets'
+
+  Ec2FrontendTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub '${EnvironmentName}-ec2-fe-tg'
+      VpcId:
+        Fn::ImportValue: !Sub '${EnvironmentName}-VpcId'
+      Port: 3000
+      Protocol: HTTP
+      TargetType: instance
+      HealthCheckPath: /health
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Matcher:
+        HttpCode: '200'
+
+  Ec2BackendTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub '${EnvironmentName}-ec2-be-tg'
+      VpcId:
+        Fn::ImportValue: !Sub '${EnvironmentName}-VpcId'
+      Port: 8000
+      Protocol: HTTP
+      TargetType: instance
+      HealthCheckPath: /api/health
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Matcher:
+        HttpCode: '200'
+
+  Ec2HttpListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref Ec2LoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref Ec2FrontendTargetGroup
+
+  Ec2ApiListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref Ec2HttpListener
+      Priority: 10
+      Conditions:
+        - Field: path-pattern
+          Values: ['/api/*']
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref Ec2BackendTargetGroup
+
+  # ------------------------------------------------------------- compute ----
+  LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub '${EnvironmentName}-app-lt'
+      LaunchTemplateData:
+        ImageId: !Ref LatestAmiId
+        InstanceType: !Ref InstanceType
+        IamInstanceProfile:
+          Arn: !GetAtt InstanceProfile.Arn
+        SecurityGroupIds:
+          - Fn::ImportValue: !Sub '${EnvironmentName}-Ec2SecurityGroup'
+        MetadataOptions:
+          HttpTokens: required
+          HttpPutResponseHopLimit: 2
+        Monitoring:
+          Enabled: true
+        BlockDeviceMappings:
+          - DeviceName: /dev/xvda
+            Ebs:
+              VolumeSize: 20
+              VolumeType: gp3
+              Encrypted: true
+              DeleteOnTermination: true
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: Name
+                Value: !Sub '${EnvironmentName}-app-instance'
+              - Key: Environment
+                Value: !Ref EnvironmentName
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            set -euxo pipefail
+            exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
+
+            dnf update -y
+            dnf install -y ruby wget tar xz jq amazon-cloudwatch-agent
+
+            # --- Python runtime for the backend ---------------------------
+            dnf install -y python3.11 python3.11-pip || dnf install -y python3 python3-pip
+
+            # --- Node.js runtime for the Next.js frontend -----------------
+            NODE_VERSION=${NodeVersion}
+            curl -fsSL "https://nodejs.org/dist/v$NODE_VERSION/node-v$NODE_VERSION-linux-x64.tar.xz" -o /tmp/node.tar.xz
+            tar -xJf /tmp/node.tar.xz -C /opt
+            ln -sf "/opt/node-v$NODE_VERSION-linux-x64/bin/node" /usr/bin/node
+            ln -sf "/opt/node-v$NODE_VERSION-linux-x64/bin/npm"  /usr/bin/npm
+
+            # --- Application directories ----------------------------------
+            mkdir -p /opt/app /var/log/app
+            id appuser >/dev/null 2>&1 || useradd --system --home /opt/app appuser
+            chown -R appuser:appuser /opt/app /var/log/app
+
+            # --- Runtime configuration (no secrets on disk) ---------------
+            cat >/etc/app.env <<ENVFILE
+            APP_ENV=${EnvironmentName}
+            AWS_REGION=${AWS::Region}
+            DB_SECRET_ARN=$(aws secretsmanager describe-secret --secret-id ${EnvironmentName}/app/database --query ARN --output text --region ${AWS::Region})
+            PORT=3000
+            HOSTNAME=0.0.0.0
+            NODE_ENV=production
+            ENVFILE
+            chmod 640 /etc/app.env
+            chown root:appuser /etc/app.env
+
+            # --- systemd units --------------------------------------------
+            cat >/etc/systemd/system/backend.service <<'UNIT'
+            [Unit]
+            Description=FastAPI backend
+            After=network-online.target
+
+            [Service]
+            Type=simple
+            User=appuser
+            EnvironmentFile=/etc/app.env
+            WorkingDirectory=/opt/app/backend
+            ExecStart=/opt/app/backend/venv/bin/uvicorn app:app --host 0.0.0.0 --port 8000
+            Restart=always
+            RestartSec=5
+            StandardOutput=append:/var/log/app/backend.log
+            StandardError=append:/var/log/app/backend.log
+
+            [Install]
+            WantedBy=multi-user.target
+            UNIT
+
+            cat >/etc/systemd/system/frontend.service <<'UNIT'
+            [Unit]
+            Description=Next.js frontend
+            After=network-online.target
+
+            [Service]
+            Type=simple
+            User=appuser
+            EnvironmentFile=/etc/app.env
+            WorkingDirectory=/opt/app/frontend
+            ExecStart=/usr/bin/node /opt/app/frontend/server.js
+            Restart=always
+            RestartSec=5
+            StandardOutput=append:/var/log/app/frontend.log
+            StandardError=append:/var/log/app/frontend.log
+
+            [Install]
+            WantedBy=multi-user.target
+            UNIT
+
+            systemctl daemon-reload
+
+            # --- CloudWatch agent: ship application logs ------------------
+            cat >/opt/aws/amazon-cloudwatch-agent/etc/app-logs.json <<CWCONF
+            {
+              "logs": {
+                "logs_collected": {
+                  "files": {
+                    "collect_list": [
+                      {"file_path": "/var/log/app/backend.log",
+                       "log_group_name": "/ec2/${EnvironmentName}/backend",
+                       "log_stream_name": "{instance_id}",
+                       "retention_in_days": 30},
+                      {"file_path": "/var/log/app/frontend.log",
+                       "log_group_name": "/ec2/${EnvironmentName}/frontend",
+                       "log_stream_name": "{instance_id}",
+                       "retention_in_days": 30}
+                    ]
+                  }
+                }
+              }
+            }
+            CWCONF
+            /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
+              -a fetch-config -m ec2 -c file:/opt/aws/amazon-cloudwatch-agent/etc/app-logs.json -s
+
+            # --- CodeDeploy agent (pulls releases from S3) ----------------
+            cd /tmp
+            wget "https://aws-codedeploy-${AWS::Region}.s3.${AWS::Region}.amazonaws.com/latest/install"
+            chmod +x ./install
+            ./install auto
+            systemctl enable --now codedeploy-agent
+
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: !Sub '${EnvironmentName}-app-asg'
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt LaunchTemplate.LatestVersionNumber
+      MinSize: !Ref MinSize
+      MaxSize: !Ref MaxSize
+      DesiredCapacity: !Ref DesiredCapacity
+      HealthCheckType: ELB
+      HealthCheckGracePeriod: 420
+      VPCZoneIdentifier: !Split
+        - ','
+        - Fn::ImportValue: !Sub '${EnvironmentName}-AppSubnets'
+      TargetGroupARNs:
+        - !Ref Ec2FrontendTargetGroup
+        - !Ref Ec2BackendTargetGroup
+      MetricsCollection:
+        - Granularity: 1Minute
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+          PropagateAtLaunch: true
+    UpdatePolicy:
+      AutoScalingRollingUpdate:
+        MinInstancesInService: !Ref MinSize
+        MaxBatchSize: 1
+        PauseTime: PT5M
+
+  ScaleOnCpu:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName: !Ref AutoScalingGroup
+      PolicyType: TargetTrackingScaling
+      TargetTrackingConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ASGAverageCPUUtilization
+        TargetValue: 60
+
+  # ----------------------------------------------------------- CodeDeploy ---
+  CodeDeployApplication:
+    Type: AWS::CodeDeploy::Application
+    Properties:
+      ApplicationName: !Sub '${EnvironmentName}-app'
+      ComputePlatform: Server
+
+  DeploymentGroup:
+    Type: AWS::CodeDeploy::DeploymentGroup
+    Properties:
+      ApplicationName: !Ref CodeDeployApplication
+      DeploymentGroupName: !Sub '${EnvironmentName}-app-dg'
+      ServiceRoleArn: !GetAtt CodeDeployServiceRole.Arn
+      AutoScalingGroups:
+        - !Ref AutoScalingGroup
+      DeploymentStyle:
+        DeploymentType: IN_PLACE
+        DeploymentOption: WITH_TRAFFIC_CONTROL
+      DeploymentConfigName: CodeDeployDefault.OneAtATime
+      LoadBalancerInfo:
+        TargetGroupInfoList:
+          - Name: !GetAtt Ec2FrontendTargetGroup.TargetGroupName
+      AutoRollbackConfiguration:
+        Enabled: true
+        Events:
+          - DEPLOYMENT_FAILURE
+          - DEPLOYMENT_STOP_ON_ALARM
+
+Outputs:
+  Ec2ApplicationUrl:
+    Description: Public URL of the non-containerised deployment
+    Value: !Sub 'http://${Ec2LoadBalancer.DNSName}'
+  ArtifactBucketName:
+    Value: !Ref ArtifactBucket
+    Export:
+      Name: !Sub '${EnvironmentName}-ArtifactBucket'
+  CodeDeployApplicationName:
+    Value: !Ref CodeDeployApplication
+    Export:
+      Name: !Sub '${EnvironmentName}-CodeDeployApplication'
+  DeploymentGroupName:
+    Value: !Ref DeploymentGroup
+    Export:
+      Name: !Sub '${EnvironmentName}-CodeDeployGroup'
+  Ec2AlbFullName:
+    Value: !GetAtt Ec2LoadBalancer.LoadBalancerFullName
+    Export:
+      Name: !Sub '${EnvironmentName}-Ec2AlbFullName'
