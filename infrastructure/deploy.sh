@@ -31,7 +31,7 @@ PARAM_FILE="$SCRIPT_DIR/params/${ENVIRONMENT}.env"
 
 # dev + 10-network.yaml  ->  dev-network
 SHORT_NAME="$(basename "$TEMPLATE_FILE" .yaml | sed 's/^[0-9]*-//')"
-STACK_NAME="${ENVIRONMENT}-${SHORT_NAME}"
+STACK_NAME="coditude-${ENVIRONMENT}-${SHORT_NAME}"
 
 echo "==> stack      : $STACK_NAME"
 echo "==> template   : $TEMPLATE_FILE"
