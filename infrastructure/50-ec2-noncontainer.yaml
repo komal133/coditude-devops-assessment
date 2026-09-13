@@ -400,10 +400,13 @@ Outputs:
   DeploymentGroupName:
     Value: !Ref DeploymentGroup
     Export:
-      Name: !Sub '${EnvironmentName}-CodeDeployGroup'
+      Name: !Sub 'coditude-${EnvironmentName}-CodeDeployGroup'
   Ec2AlbFullName:
     Value: !GetAtt Ec2LoadBalancer.LoadBalancerFullName
     Export:
       Name: !Sub '${EnvironmentName}-Ec2AlbFullName'
+
+
+
 
 
