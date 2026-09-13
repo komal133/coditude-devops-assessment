@@ -115,7 +115,7 @@ Resources:
   Ec2LoadBalancer:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Properties:
-      Name: !Sub '${EnvironmentName}-ec2-alb'
+      Name: !Sub 'coditude-${EnvironmentName}-ec2-alb'
       Scheme: internet-facing
       Type: application
       SecurityGroups:
@@ -127,7 +127,7 @@ Resources:
   Ec2FrontendTargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
-      Name: !Sub '${EnvironmentName}-ec2-fe-tg'
+      Name: !Sub 'coditude-${EnvironmentName}-ec2-fe-tg'
       VpcId:
         Fn::ImportValue: !Sub '${EnvironmentName}-VpcId'
       Port: 3000
@@ -142,7 +142,7 @@ Resources:
   Ec2BackendTargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
-      Name: !Sub '${EnvironmentName}-ec2-be-tg'
+      Name: !Sub 'coditude-${EnvironmentName}-ec2-be-tg'
       VpcId:
         Fn::ImportValue: !Sub '${EnvironmentName}-VpcId'
       Port: 8000
@@ -180,7 +180,7 @@ Resources:
   LaunchTemplate:
     Type: AWS::EC2::LaunchTemplate
     Properties:
-      LaunchTemplateName: !Sub '${EnvironmentName}-app-lt'
+      LaunchTemplateName: !Sub 'coditude-${EnvironmentName}-app-lt'
       LaunchTemplateData:
         ImageId: !Ref LatestAmiId
         InstanceType: !Ref InstanceType
@@ -392,11 +392,11 @@ Outputs:
   ArtifactBucketName:
     Value: !Ref ArtifactBucket
     Export:
-      Name: !Sub '${EnvironmentName}-ArtifactBucket'
+      Name: !Sub 'coditude-${EnvironmentName}-ArtifactBucket'
   CodeDeployApplicationName:
     Value: !Ref CodeDeployApplication
     Export:
-      Name: !Sub '${EnvironmentName}-CodeDeployApplication'
+      Name: !Sub 'coditude-${EnvironmentName}-CodeDeployApplication'
   DeploymentGroupName:
     Value: !Ref DeploymentGroup
     Export:
@@ -404,7 +404,9 @@ Outputs:
   Ec2AlbFullName:
     Value: !GetAtt Ec2LoadBalancer.LoadBalancerFullName
     Export:
-      Name: !Sub '${EnvironmentName}-Ec2AlbFullName'
+      Name: !Sub 'coditude-${EnvironmentName}-Ec2AlbFullName'
+
+
 
 
 
