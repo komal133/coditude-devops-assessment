@@ -83,6 +83,9 @@ Resources:
                   - !Sub 'arn:aws:iam::${AWS::AccountId}:role/coditude-dev-*'
                   - !Sub 'arn:aws:iam::${AWS::AccountId}:role/coditude-staging-*'
                   - !Sub 'arn:aws:iam::${AWS::AccountId}:role/coditude-prod-*'
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/dev-ecs-*'
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/staging-ecs-*'
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/prod-ecs-*'
                   - !Sub 'arn:aws:iam::${AWS::AccountId}:role/aws-service-role/*'
                   - !Sub 'arn:aws:iam::${AWS::AccountId}:instance-profile/*'
 
@@ -90,4 +93,6 @@ Outputs:
   RoleArn:
     Description: Put this value into the GitHub repository variable AWS_ROLE_ARN
     Value: !GetAtt GitHubActionsRole.Arn
+
+
 
