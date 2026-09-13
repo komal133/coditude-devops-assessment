@@ -6,12 +6,6 @@ Description: >
   Deploy this stack ONCE per AWS account.
 
 Parameters:
-  GitHubOrg:
-    Type: String
-    Description: Your GitHub username or organisation, e.g. machindra-dev
-  GitHubRepo:
-    Type: String
-    Description: Repository name, e.g. aws-devops-assessment
   CreateOidcProvider:
     Type: String
     Default: 'true'
@@ -39,7 +33,7 @@ Resources:
   GitHubActionsRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub 'github-actions-${GitHubRepo}'
+      RoleName: github-actions-coditude-devops-assessment
       Description: Assumed by GitHub Actions through OIDC - no static keys.
       MaxSessionDuration: 3600
       AssumeRolePolicyDocument:
@@ -96,3 +90,4 @@ Outputs:
   RoleArn:
     Description: Put this value into the GitHub repository variable AWS_ROLE_ARN
     Value: !GetAtt GitHubActionsRole.Arn
+
