@@ -29,7 +29,7 @@ This repository contains everything asked for in the assessment:
 |   |-- 40-ecs-services.yaml Fargate task definitions, services, auto scaling
 |   |-- 50-ec2-noncontainer.yaml  ALB, ASG, CodeDeploy (non-containerised)
 |   |-- 60-monitoring.yaml   Alarms, SNS, dashboard
-|   |-- 70-aws-native-pipeline.yaml  CodePipeline + CodeBuild (optional)
+|   |-- 70-aws-native-pipeline.yaml  CodePipeline + CodeBuild (required)
 |   |-- deploy.sh            Thin wrapper around "aws cloudformation deploy"
 |   `-- params/              dev.env / staging.env / prod.env
 |-- deploy/
@@ -51,7 +51,7 @@ export AWS_REGION=ap-south-1
 # 1. One-time: CI/CD identity
 aws cloudformation deploy --template-file infrastructure/00-github-oidc.yaml \
   --stack-name github-oidc --capabilities CAPABILITY_NAMED_IAM \
-  --parameter-overrides GitHubOrg=<your-org> GitHubRepo=aws-devops-assessment
+  --parameter-overrides GitHubOrg=<your-org> GitHubRepo=coditude-devops-assessment
 
 # 2. Infrastructure, in order
 ./infrastructure/deploy.sh dev 10-network.yaml
@@ -68,3 +68,4 @@ aws cloudformation deploy --template-file infrastructure/00-github-oidc.yaml \
 ```
 
 The full, ordered, copy-paste procedure is in `docs/03-deployment-flow.md`.
+
