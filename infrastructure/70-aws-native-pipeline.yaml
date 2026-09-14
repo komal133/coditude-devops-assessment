@@ -152,6 +152,7 @@ Resources:
                   - ecs:ListTasks
                   - ecs:RegisterTaskDefinition
                   - ecs:UpdateService
+                  - ecs:TagResource
                 Resource: '*'
               - Effect: Allow
                 Action: iam:PassRole
@@ -216,3 +217,5 @@ Resources:
 Outputs:
   PipelineName:
     Value: !Ref Pipeline
+
+
