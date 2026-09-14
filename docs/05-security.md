@@ -32,7 +32,7 @@ the tasks/services. No code change, no redeployment of infrastructure.
 * **Security groups**: the database accepts 5432 only from the ECS and EC2
   security groups. Application ports 3000/8000 accept traffic only from the
   ALB security group. Nothing accepts traffic from `0.0.0.0/0` except the two
-  load balancers on 80/443.
+  load balancers on HTTP port 80.
 
 ## Data protection
 
