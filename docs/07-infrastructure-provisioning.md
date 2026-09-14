@@ -47,7 +47,7 @@ dependencies; standalone rules do not.
   requires no change to the script and no new file.
 * **Conditions handle structural differences**, for example
   `HighAvailabilityNat` creating a second NAT Gateway only in prod, and
-  `CertificateArn` creating an HTTPS listener only where a certificate exists.
+  HTTPS activation is domain/certificate dependent and was not enabled because no controlled domain or ACM certificate was available for this assessment environment. The v1.1 guide documents the optional ACM certificate and HTTPS listener configuration.
 * **`reusable-ec2-deploy.yml`** applies the same principle to CI: one workflow
   definition, called three times with a different environment input.
 
@@ -64,22 +64,22 @@ dependencies; standalone rules do not.
 Environments are separated by naming convention inside one account, which
 keeps the assessment cheap to run. In a real organisation each environment
 would be a separate AWS account under AWS Organizations, with the same
-templates and the same parameter files unchanged — that is the point of
+templates and the same parameter files unchanged â€” that is the point of
 keeping differences in data rather than code.
 
 ## Provisioning lifecycle
 
-1. **Author** — edit a template or a parameter file on a branch.
-2. **Validate** — `cfn-lint infrastructure/*.yaml` runs in CI before anything
+1. **Author** â€” edit a template or a parameter file on a branch.
+2. **Validate** â€” `cfn-lint infrastructure/*.yaml` runs in CI before anything
    reaches AWS, and can be run locally with the same command.
-3. **Preview (optional, recommended for prod)** —
+3. **Preview (optional, recommended for prod)** â€”
    `aws cloudformation deploy --no-execute-changeset ...` produces a change set
    that lists exactly which resources would be modified, replaced or deleted.
-4. **Apply** — merge to `main`. The `Infrastructure` workflow deploys dev
+4. **Apply** â€” merge to `main`. The `Infrastructure` workflow deploys dev
    automatically, then waits for approval before staging and prod.
-5. **Verify** — the deploy script prints the stack outputs; alarms and the
+5. **Verify** â€” the deploy script prints the stack outputs; alarms and the
    dashboard confirm runtime health.
-6. **Roll back** — failed updates roll back automatically; see `06-rollback.md`.
+6. **Roll back** â€” failed updates roll back automatically; see `06-rollback.md`.
 
 ## Handling state and drift
 
