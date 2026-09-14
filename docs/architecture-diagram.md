@@ -10,9 +10,9 @@ flowchart TB
   subgraph AWS["AWS Region - ap-south-1"]
     subgraph VPC["VPC 10.20.0.0/16 - 2 Availability Zones"]
       subgraph PUB["Public subnets"]
-        ALB1["ALB - containerised"]
-        ALB2["ALB - non-containerised"]
-        NAT["NAT Gateway"]
+        ALB1["ALB - containerised (HTTP 80)"]
+        ALB2["ALB - non-containerised (HTTP 80)"]
+        NAT["NAT Gateways (HA in Production)"]
       end
       subgraph APP["Private application subnets"]
         FE["ECS Fargate: Next.js :3000"]
@@ -53,3 +53,4 @@ flowchart TB
   EC2 -.logs.-> CW
   APP --> NAT
 ```
+
